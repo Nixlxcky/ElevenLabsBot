@@ -6,7 +6,6 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.filters import Command
 
-
 from services.elevenlabs import ElevenLabsAPI
 from database.database import Database
 from keyboards.keyboards import (
@@ -68,6 +67,7 @@ async def sync_voices(message: Message):
     except Exception as e:
         await message.answer(f"❌ Ошибка синхронизации голосов: {str(e)}")
 
+
 @router.callback_query(F.data.startswith('page_'))
 async def process_page_callback(callback_query: CallbackQuery):
     page = int(callback_query.data.split('_')[1])
@@ -75,6 +75,7 @@ async def process_page_callback(callback_query: CallbackQuery):
     await callback_query.message.edit_reply_markup(
         reply_markup=get_language_keyboard(voices, page)
     )
+
 
 @router.callback_query(F.data.startswith("lang_"))
 async def process_language_selection(callback: CallbackQuery):
@@ -87,7 +88,6 @@ async def process_language_selection(callback: CallbackQuery):
     )
 
 
-
 @router.callback_query(F.data.startswith("voice_"))
 async def process_voice_selection(callback: CallbackQuery, state: FSMContext):
     voice_id = callback.data.split("_")[1]
@@ -98,6 +98,8 @@ async def process_voice_selection(callback: CallbackQuery, state: FSMContext):
         "Отправьте текст, который нужно озвучить.",
         reply_markup=get_cancel_keyboard()
     )
+
+
 @router.message(VoiceStates.waiting_for_text)
 async def process_text(message: Message, state: FSMContext):
     try:
@@ -142,7 +144,6 @@ async def start_add_voice(message: Message, state: FSMContext):
         "• Отсутствие посторонних звуков",
         reply_markup=get_cancel_keyboard()
     )
-
 
 
 @router.message(VoiceStates.waiting_for_audio_file, F.audio | F.document)
@@ -240,6 +241,7 @@ async def process_voice_name(message: Message, state: FSMContext):
         )
         await state.clear()
 
+
 @router.callback_query(F.data == "cancel")
 async def cancel_operation(callback: CallbackQuery, state: FSMContext):
     await state.clear()
@@ -255,3 +257,50 @@ async def back_to_languages(callback: CallbackQuery):
         "Выберите язык для озвучки текста:",
         reply_markup=get_language_keyboard(voices)
     )
+
+
+@router.message(~F.state, F.voice | F.audio)
+async def handle_voice_message(message: Message):
+    try:
+        processing_msg = await message.answer("⏳ Обрабатываю аудио...")
+
+        if message.voice:
+            file_id = message.voice.file_id
+            file_name = f"voice_{message.from_user.id}.ogg"
+        else:
+            file_id = message.audio.file_id
+            file_name = message.audio.file_name or f"audio_{message.from_user.id}.mp3"
+
+        file = await message.bot.get_file(file_id)
+        temp_input_file = f"temp_input_{message.from_user.id}{os.path.splitext(file_name)[1]}"
+        await message.bot.download_file(file.file_path, temp_input_file)
+
+        with open(temp_input_file, "rb") as f:
+            audio_bytes = f.read()
+
+        converted_audio = await elevenlabs_api.speech_to_speech(
+            audio_data=audio_bytes
+        )
+
+        temp_output_file = f"temp_output_{message.from_user.id}.mp3"
+        with open(temp_output_file, "wb") as f:
+            f.write(converted_audio)
+
+        await message.answer_audio(
+            FSInputFile(temp_output_file, filename="converted_speech.mp3"),
+            caption="🎤 Речь преобразована"
+        )
+
+        if os.path.exists(temp_input_file):
+            os.remove(temp_input_file)
+        if os.path.exists(temp_output_file):
+            os.remove(temp_output_file)
+
+        await message.bot.delete_message(chat_id=message.chat.id, message_id=processing_msg.message_id)
+
+    except Exception as e:
+        await message.answer(f"❌ Произошла ошибка при обработке аудио: {str(e)}")
+
+        for filename in ['temp_input_file', 'temp_output_file']:
+            if filename in locals() and os.path.exists(locals()[filename]):
+                os.remove(locals()[filename])
