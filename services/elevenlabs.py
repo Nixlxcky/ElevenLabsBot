@@ -1,7 +1,5 @@
-from typing import List, Dict
-
 from aiohttp import ClientSession, FormData
-
+from typing import List, Dict
 
 LANGUAGE_MAPPING = {
     "en": "Английский",
@@ -73,7 +71,8 @@ class ElevenLabsAPI:
         self.api_url = api_url
         self.headers = {
             "xi-api-key": self.api_key,
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            # "Accept-Language": "ru"
         }
 
     async def get_voices(self) -> List[Dict]:
@@ -109,12 +108,24 @@ class ElevenLabsAPI:
                     return voices
                 raise Exception(f"Failed to get voices: {response.status}")
 
-    async def text_to_speech(self, text: str, voice_id: str) -> bytes:
+    async def text_to_speech(self, text: str, voice_id: str,
+                             model_id: str = "eleven_multilingual_v2",
+                             similarity_boost: float = 0.6,
+                             stability: float = 0.4,
+                             style: float = 0.7,
+                             use_speaker_boost: bool = True,
+                             speed: float = 1) -> bytes:
         async with ClientSession() as session:
             async with session.post(
                     f"{self.api_url}/text-to-speech/{voice_id}",
                     headers=self.headers,
-                    json={"text": text, "optimize_streaming_latency": 0}
+                    json={"text": text, 'model_id': model_id, "voice_settings": {
+                        "stability": stability,
+                        "similarity_boost": similarity_boost,
+                        "style": style,
+                        "use_speaker_boost": use_speaker_boost,
+                        'speed': speed
+                    }}
             ) as response:
                 if response.status == 200:
                     return await response.read()
@@ -146,3 +157,39 @@ class ElevenLabsAPI:
                         "is_cloned": True
                     }
                 raise Exception(f"Failed to clone voice: {response.status}")
+
+    async def speech_to_speech(self,
+                               audio_data: bytes,
+                               voice_id: str = 'tOo2BJ74frmnPadsDNIi',  # id Кати
+                               model_id: str = "eleven_multilingual_sts_v2",
+                               similarity_boost: float = 0.6,
+                               stability: float = 0.4,
+                               style: float = 0.0,
+                               use_speaker_boost: bool = True) -> bytes:
+
+        form_data = FormData()
+
+        form_data.add_field(
+            "audio",
+            audio_data,
+            filename="input_audio.mp3",
+            content_type="audio/mpeg"
+        )
+
+        form_data.add_field("model_id", model_id)
+        form_data.add_field("voice_settings",
+                            f'{{"similarity_boost": {similarity_boost}, "stability": {stability}, "style": {style}, "use_speaker_boost": {str(use_speaker_boost).lower()}}}'
+                            )
+
+        async with ClientSession() as session:
+            async with session.post(
+                    f"{self.api_url}/speech-to-speech/{voice_id}",
+                    headers={"xi-api-key": self.api_key},
+                    data=form_data
+            ) as response:
+                if response.status == 200:
+                    return await response.read()
+                else:
+                    error_text = await response.text()
+                    raise Exception(f"Failed to convert speech: {response.status}, {error_text}")
+
